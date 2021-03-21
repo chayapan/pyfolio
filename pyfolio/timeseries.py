@@ -1,5 +1,5 @@
 #
-# Copyright 2015 Quantopian, Inc.
+# Copyright 2018 Quantopian, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,18 +15,29 @@
 from __future__ import division
 
 from collections import OrderedDict
+from functools import partial
 
-import pandas as pd
+import empyrical as ep
 import numpy as np
+import pandas as pd
 import scipy as sp
 import scipy.stats as stats
-from sklearn import preprocessing
+from sklearn import linear_model
 
-import statsmodels.api as sm
+from .deprecate import deprecated
+from .interesting_periods import PERIODS
+from .txn import get_turnover
+from .utils import APPROX_BDAYS_PER_MONTH, APPROX_BDAYS_PER_YEAR
+from .utils import DAILY
+
+DEPRECATION_WARNING = ("Risk functions in pyfolio.timeseries are deprecated "
+                       "and will be removed in a future release. Please "
+                       "install the empyrical package instead.")
 
 
 def var_cov_var_normal(P, c, mu=0, sigma=1):
-    """Variance-covariance calculation of daily Value-at-Risk in a
+    """
+    Variance-covariance calculation of daily Value-at-Risk in a
     portfolio.
 
     Parameters
@@ -42,11 +53,385 @@ def var_cov_var_normal(P, c, mu=0, sigma=1):
     -------
     float
         Variance-covariance.
-
     """
 
     alpha = sp.stats.norm.ppf(1 - c, mu, sigma)
     return P - P * (alpha + 1)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def max_drawdown(returns):
+    """
+    Determines the maximum drawdown of a strategy.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+
+    Returns
+    -------
+    float
+        Maximum drawdown.
+
+    Note
+    -----
+    See https://en.wikipedia.org/wiki/Drawdown_(economics) for more details.
+    """
+
+    return ep.max_drawdown(returns)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def annual_return(returns, period=DAILY):
+    """
+    Determines the mean annual growth rate of returns.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Periodic returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+    period : str, optional
+        Defines the periodicity of the 'returns' data for purposes of
+        annualizing. Can be 'monthly', 'weekly', or 'daily'.
+        - Defaults to 'daily'.
+
+    Returns
+    -------
+    float
+        Annual Return as CAGR (Compounded Annual Growth Rate).
+    """
+
+    return ep.annual_return(returns, period=period)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def annual_volatility(returns, period=DAILY):
+    """
+    Determines the annual volatility of a strategy.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Periodic returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+    period : str, optional
+        Defines the periodicity of the 'returns' data for purposes of
+        annualizing volatility. Can be 'monthly' or 'weekly' or 'daily'.
+        - Defaults to 'daily'.
+
+    Returns
+    -------
+    float
+        Annual volatility.
+    """
+
+    return ep.annual_volatility(returns, period=period)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def calmar_ratio(returns, period=DAILY):
+    """
+    Determines the Calmar ratio, or drawdown ratio, of a strategy.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+    period : str, optional
+        Defines the periodicity of the 'returns' data for purposes of
+        annualizing. Can be 'monthly', 'weekly', or 'daily'.
+        - Defaults to 'daily'.
+
+    Returns
+    -------
+    float
+        Calmar ratio (drawdown ratio) as float. Returns np.nan if there is no
+        calmar ratio.
+
+    Note
+    -----
+    See https://en.wikipedia.org/wiki/Calmar_ratio for more details.
+    """
+
+    return ep.calmar_ratio(returns, period=period)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def omega_ratio(returns, annual_return_threshhold=0.0):
+    """
+    Determines the Omega ratio of a strategy.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+    annual_return_threshold : float, optional
+        Minimum acceptable return of the investor. Annual threshold over which
+        returns are considered positive or negative. It is converted to a
+        value appropriate for the period of the returns for this ratio.
+        E.g. An annual minimum acceptable return of 100 translates to a daily
+        minimum acceptable return of 0.01848.
+            (1 + 100) ** (1. / 252) - 1 = 0.01848
+        Daily returns must exceed this value to be considered positive. The
+        daily return yields the desired annual return when compounded over
+        the average number of business days in a year.
+            (1 + 0.01848) ** 252 - 1 = 99.93
+        - Defaults to 0.0
+
+
+    Returns
+    -------
+    float
+        Omega ratio.
+
+    Note
+    -----
+    See https://en.wikipedia.org/wiki/Omega_ratio for more details.
+    """
+
+    return ep.omega_ratio(returns,
+                          required_return=annual_return_threshhold)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def sortino_ratio(returns, required_return=0, period=DAILY):
+    """
+    Determines the Sortino ratio of a strategy.
+
+    Parameters
+    ----------
+    returns : pd.Series or pd.DataFrame
+        Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+    required_return: float / series
+        minimum acceptable return
+    period : str, optional
+        Defines the periodicity of the 'returns' data for purposes of
+        annualizing. Can be 'monthly', 'weekly', or 'daily'.
+        - Defaults to 'daily'.
+
+    Returns
+    -------
+    depends on input type
+    series ==> float
+    DataFrame ==> np.array
+
+        Annualized Sortino ratio.
+    """
+
+    return ep.sortino_ratio(returns, required_return=required_return)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def downside_risk(returns, required_return=0, period=DAILY):
+    """
+    Determines the downside deviation below a threshold
+
+    Parameters
+    ----------
+    returns : pd.Series or pd.DataFrame
+        Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+    required_return: float / series
+        minimum acceptable return
+    period : str, optional
+        Defines the periodicity of the 'returns' data for purposes of
+        annualizing. Can be 'monthly', 'weekly', or 'daily'.
+        - Defaults to 'daily'.
+
+    Returns
+    -------
+    depends on input type
+    series ==> float
+    DataFrame ==> np.array
+
+        Annualized downside deviation
+    """
+
+    return ep.downside_risk(returns,
+                            required_return=required_return,
+                            period=period)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def sharpe_ratio(returns, risk_free=0, period=DAILY):
+    """
+    Determines the Sharpe ratio of a strategy.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+    risk_free : int, float
+        Constant risk-free return throughout the period.
+    period : str, optional
+        Defines the periodicity of the 'returns' data for purposes of
+        annualizing. Can be 'monthly', 'weekly', or 'daily'.
+        - Defaults to 'daily'.
+
+    Returns
+    -------
+    float
+        Sharpe ratio.
+    np.nan
+        If insufficient length of returns or if if adjusted returns are 0.
+
+    Note
+    -----
+    See https://en.wikipedia.org/wiki/Sharpe_ratio for more details.
+    """
+
+    return ep.sharpe_ratio(returns, risk_free=risk_free, period=period)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def alpha_beta(returns, factor_returns):
+    """
+    Calculates both alpha and beta.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+    factor_returns : pd.Series
+        Daily noncumulative returns of the benchmark factor to which betas are
+        computed. Usually a benchmark such as market returns.
+         - This is in the same style as returns.
+
+    Returns
+    -------
+    float
+        Alpha.
+    float
+        Beta.
+    """
+
+    return ep.alpha_beta(returns, factor_returns=factor_returns)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def alpha(returns, factor_returns):
+    """
+    Calculates annualized alpha.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+    factor_returns : pd.Series
+        Daily noncumulative returns of the benchmark factor to which betas are
+        computed. Usually a benchmark such as market returns.
+         - This is in the same style as returns.
+
+    Returns
+    -------
+    float
+        Alpha.
+    """
+
+    return ep.alpha(returns, factor_returns=factor_returns)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def beta(returns, factor_returns):
+    """
+    Calculates beta.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+    factor_returns : pd.Series
+        Daily noncumulative returns of the benchmark factor to which betas are
+        computed. Usually a benchmark such as market returns.
+         - This is in the same style as returns.
+
+    Returns
+    -------
+    float
+        Beta.
+    """
+
+    return ep.beta(returns, factor_returns)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def stability_of_timeseries(returns):
+    """
+    Determines R-squared of a linear fit to the cumulative
+    log returns. Computes an ordinary least squares linear fit,
+    and returns R-squared.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+
+    Returns
+    -------
+    float
+        R-squared.
+    """
+
+    return ep.stability_of_timeseries(returns)
+
+
+@deprecated(msg=DEPRECATION_WARNING)
+def tail_ratio(returns):
+    """
+    Determines the ratio between the right (95%) and left tail (5%).
+
+    For example, a ratio of 0.25 means that losses are four times
+    as bad as profits.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
+
+    Returns
+    -------
+    float
+        tail ratio
+    """
+
+    return ep.tail_ratio(returns)
+
+
+def common_sense_ratio(returns):
+    """
+    Common sense ratio is the multiplication of the tail ratio and the
+    Gain-to-Pain-Ratio -- sum(profits) / sum(losses).
+
+    See http://bit.ly/1ORzGBk for more information on motivation of
+    this metric.
+
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+
+    Returns
+    -------
+    float
+        common sense ratio
+    """
+
+    return ep.tail_ratio(returns) * \
+        (1 + ep.annual_return(returns))
 
 
 def normalize(returns, starting_value=1):
@@ -56,7 +441,8 @@ def normalize(returns, starting_value=1):
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
     starting_value : float, optional
        The starting returns (default 1).
 
@@ -69,14 +455,16 @@ def normalize(returns, starting_value=1):
     return starting_value * (returns / returns.iloc[0])
 
 
-def cum_returns(returns, starting_value=None):
+@deprecated(msg=DEPRECATION_WARNING)
+def cum_returns(returns, starting_value=0):
     """
     Compute cumulative returns from simple returns.
 
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
     starting_value : float, optional
        The starting returns (default 1).
 
@@ -91,30 +479,19 @@ def cum_returns(returns, starting_value=None):
     where it is possible to sum instead of multiplying.
     """
 
-    # df_price.pct_change() adds a nan in first position, we can use
-    # that to have cum_returns start at the origin so that
-    # df_cum.iloc[0] == starting_value
-    # Note that we can't add that ourselves as we don't know which dt
-    # to use.
-    if pd.isnull(returns.iloc[0]):
-        returns.iloc[0] = 0.
-
-    df_cum = np.exp(np.log(1 + returns).cumsum())
-
-    if starting_value is None:
-        return df_cum - 1
-    else:
-        return df_cum * starting_value
+    return ep.cum_returns(returns, starting_value=starting_value)
 
 
-def aggregate_returns(df_daily_rets, convert_to):
+@deprecated(msg=DEPRECATION_WARNING)
+def aggregate_returns(returns, convert_to):
     """
     Aggregates returns by week, month, or year.
 
     Parameters
     ----------
-    df_daily_rets : pd.Series
-       Daily returns of the strategy, non-cumulative.
+    returns : pd.Series
+       Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
     convert_to : str
         Can be 'weekly', 'monthly', or 'yearly'.
 
@@ -124,393 +501,27 @@ def aggregate_returns(df_daily_rets, convert_to):
         Aggregated returns.
     """
 
-    def cumulate_returns(x):
-        return cum_returns(x)[-1]
-
-    if convert_to == 'weekly':
-        return df_daily_rets.groupby(
-            [lambda x: x.year,
-             lambda x: x.month,
-             lambda x: x.isocalendar()[1]]).apply(cumulate_returns)
-    elif convert_to == 'monthly':
-        return df_daily_rets.groupby(
-            [lambda x: x.year, lambda x: x.month]).apply(cumulate_returns)
-    elif convert_to == 'yearly':
-        return df_daily_rets.groupby(
-            [lambda x: x.year]).apply(cumulate_returns)
-    else:
-        ValueError('convert_to must be weekly, monthly or yearly')
+    return ep.aggregate_returns(returns, convert_to=convert_to)
 
 
-def max_drawdown(returns):
+def rolling_beta(returns, factor_returns,
+                 rolling_window=APPROX_BDAYS_PER_MONTH * 6):
     """
-    Determines the maximum drawdown of a strategy.
+    Determines the rolling beta of a strategy.
 
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-
-    Returns
-    -------
-    float
-        Maximum drawdown.
-
-    Note
-    -----
-    See https://en.wikipedia.org/wiki/Drawdown_(economics) for more details.
-    """
-
-    if returns.size < 1:
-        return np.nan
-
-    df_cum_rets = cum_returns(returns, starting_value=100)
-
-    MDD = 0
-    DD = 0
-    peak = -99999
-    for value in df_cum_rets:
-        if (value > peak):
-            peak = value
-        else:
-            DD = (peak - value) / peak
-        if (DD > MDD):
-            MDD = DD
-    return -1 * MDD
-
-
-def annual_return(returns, style='compound'):
-    """Determines the annual returns of a strategy.
-
-    Parameters
-    ----------
-    returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-    style : str, optional
-        - If 'compound', then return will be calculated in geometric
-          terms: (1+mean(all_daily_returns))^252 - 1.
-        - If 'calendar', then return will be calculated as
-          ((last_value - start_value)/start_value)/num_of_years.
-        - Otherwise, return is simply mean(all_daily_returns)*252.
-
-    Returns
-    -------
-    float
-        Annual returns.
-
-    """
-
-    if returns.size < 1:
-        return np.nan
-
-    if style == 'calendar':
-        num_years = len(returns) / 252
-        df_cum_rets = cum_returns(returns, starting_value=100)
-        start_value = df_cum_rets[0]
-        end_value = df_cum_rets[-1]
-        return ((end_value - start_value) / start_value) / num_years
-    if style == 'compound':
-        return pow((1 + returns.mean()), 252) - 1
-    else:
-        return returns.mean() * 252
-
-
-def annual_volatility(returns):
-    """
-    Determines the annual volatility of a strategy.
-
-    Parameters
-    ----------
-    returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-
-    Returns
-    -------
-    float
-        Annual volatility.
-    """
-
-    if returns.size < 2:
-        return np.nan
-
-    return returns.std() * np.sqrt(252)
-
-
-def calmar_ratio(returns, returns_style='calendar'):
-    """
-    Determines the Calmar ratio, or drawdown ratio, of a strategy.
-
-    Parameters
-    ----------
-    returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-    returns_style : str, optional
-        See annual_returns' style
-
-    Returns
-    -------
-    float
-        Calmar ratio (drawdown ratio).
-
-    Note
-    -----
-    See https://en.wikipedia.org/wiki/Calmar_ratio for more details.
-    """
-
-    temp_max_dd = max_drawdown(returns=returns)
-    if temp_max_dd < 0:
-        temp = annual_return(
-            returns=returns,
-            style=returns_style) / abs(max_drawdown(returns=returns))
-    else:
-        return np.nan
-
-    if np.isinf(temp):
-        return np.nan
-
-    return temp
-
-
-def omega_ratio(returns, annual_return_threshhold=0.0):
-    """Determines the Omega ratio of a strategy.
-
-    Parameters
-    ----------
-    returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-    annual_return_threshold : float, optional
-        Threshold over which to consider positive vs negative
-        returns. For the ratio, it will be converted to a daily return
-        and compared to returns.
-
-    Returns
-    -------
-    float
-        Omega ratio.
-
-    Note
-    -----
-    See https://en.wikipedia.org/wiki/Omega_ratio for more details.
-
-"""
-
-    daily_return_thresh = pow(1 + annual_return_threshhold, 1 / 252) - 1
-
-    returns_less_thresh = returns - daily_return_thresh
-
-    numer = sum(returns_less_thresh[returns_less_thresh > 0.0])
-    denom = -1.0 * sum(returns_less_thresh[returns_less_thresh < 0.0])
-
-    if denom > 0.0:
-        return numer / denom
-    else:
-        return np.nan
-
-
-def sortino_ratio(returns, returns_style='compound'):
-    """
-    Determines the Sortino ratio of a strategy.
-
-    Parameters
-    ----------
-    returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-
-    Returns
-    -------
-    float
-        Sortino ratio.
-
-    Note
-    -----
-    See https://en.wikipedia.org/wiki/Sortino_ratio for more details.
-    """
-    numer = annual_return(returns, style=returns_style)
-    denom = annual_volatility(returns[returns < 0.0])
-
-    if denom > 0.0:
-        return numer / denom
-    else:
-        return np.nan
-
-
-def sharpe_ratio(returns, returns_style='compound'):
-    """
-    Determines the Sharpe ratio of a strategy.
-
-    Parameters
-    ----------
-    returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-    returns_style : str, optional
-        See annual_returns' style
-
-    Returns
-    -------
-    float
-        Sharpe ratio.
-
-    Note
-    -----
-    See https://en.wikipedia.org/wiki/Sharpe_ratio for more details.
-    """
-
-    numer = annual_return(returns, style=returns_style)
-    denom = annual_volatility(returns)
-
-    if denom > 0.0:
-        return numer / denom
-    else:
-        return np.nan
-
-
-def stability_of_timeseries(returns, logValue=True):
-    """Determines R-squared of a linear fit to the returns.
-
-    Computes an ordinary least squares linear fit, and returns
-    R-squared.
-
-    Parameters
-    ----------
-    returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-
-    Returns
-    -------
-    float
-        R-squared.
-
-    """
-
-    if returns.size < 2:
-        return np.nan
-
-    df_cum_rets = cum_returns(returns, starting_value=100)
-    temp_values = np.log10(
-        df_cum_rets.values) if logValue else df_cum_rets.values
-    len_returns = df_cum_rets.size
-
-    X = list(range(0, len_returns))
-    X = sm.add_constant(X)
-
-    model = sm.OLS(temp_values, X).fit()
-
-    return model.rsquared
-
-
-def out_of_sample_vs_in_sample_returns_kde(
-        bt_ts, oos_ts, transform_style='scale', return_zero_if_exception=True):
-    """Determines similarity between two returns timeseries.
-
-    Typically a backtest frame (in-sample) and live frame
-    (out-of-sample).
-
-    Parameters
-    ----------
-    bt_ts : pd.Series
-       In-sample (backtest) returns of the strategy, non-cumulative.
-    oos_ts : pd.Series
-       Out-of-sample (live trading) returns of the strategy,
-       non-cumulative.
-    transform_style : float, optional
-        'raw', 'scale', 'Normalize_L1', 'Normalize_L2' (default
-        'scale')
-    return_zero_if_exception : bool, optional
-        If there is an exception, return zero instead of NaN.
-
-    Returns
-    -------
-    float
-        Similarity between returns.
-
-    """
-
-    bt_ts_pct = bt_ts.dropna()
-    oos_ts_pct = oos_ts.dropna()
-
-    bt_ts_r = bt_ts_pct.reshape(len(bt_ts_pct), 1)
-    oos_ts_r = oos_ts_pct.reshape(len(oos_ts_pct), 1)
-
-    if transform_style == 'raw':
-        bt_scaled = bt_ts_r
-        oos_scaled = oos_ts_r
-    if transform_style == 'scale':
-        bt_scaled = preprocessing.scale(bt_ts_r, axis=0)
-        oos_scaled = preprocessing.scale(oos_ts_r, axis=0)
-    if transform_style == 'normalize_L2':
-        bt_scaled = preprocessing.normalize(bt_ts_r, axis=1)
-        oos_scaled = preprocessing.normalize(oos_ts_r, axis=1)
-    if transform_style == 'normalize_L1':
-        bt_scaled = preprocessing.normalize(bt_ts_r, axis=1, norm='l1')
-        oos_scaled = preprocessing.normalize(oos_ts_r, axis=1, norm='l1')
-
-    X_train = bt_scaled
-    X_test = oos_scaled
-
-    X_train = X_train.reshape(len(X_train))
-    X_test = X_test.reshape(len(X_test))
-
-    x_axis_dim = np.linspace(-4, 4, 100)
-    kernal_method = 'scott'
-
-    try:
-        scipy_kde_train = stats.gaussian_kde(
-            X_train,
-            bw_method=kernal_method)(x_axis_dim)
-        scipy_kde_test = stats.gaussian_kde(
-            X_test,
-            bw_method=kernal_method)(x_axis_dim)
-    except:
-        if return_zero_if_exception:
-            return 0.0
-        else:
-            return np.nan
-
-    kde_diff = sum(abs(scipy_kde_test - scipy_kde_train)) / \
-        (sum(scipy_kde_train) + sum(scipy_kde_test))
-
-    return kde_diff
-
-
-def calc_multifactor(returns, factors):
-    """Computes multiple ordinary least squares linear fits, and returns
-    fit parameters.
-
-    Parameters
-    ----------
-    returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-    factors : pd.Series
-        Secondary sets to fit.
-
-    Returns
-    -------
-    pd.DataFrame
-        Fit parameters.
-
-    """
-
-    import statsmodels.api as sm
-    factors = factors.loc[returns.index]
-    factors = sm.add_constant(factors)
-    factors = factors.dropna(axis=0)
-    results = sm.OLS(returns[factors.index], factors).fit()
-
-    return results.params
-
-
-def rolling_beta(returns, benchmark_rets, rolling_window=63):
-    """Determines the rolling beta of a strategy.
-
-    Parameters
-    ----------
-    returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-    benchmark_rets : pd.Series
-        Daily non-cumulative returns of a benchmark.
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+    factor_returns : pd.Series or pd.DataFrame
+        Daily noncumulative returns of the benchmark factor to which betas are
+        computed. Usually a benchmark such as market returns.
+         - If DataFrame is passed, computes rolling beta for each column.
+         - This is in the same style as returns.
     rolling_window : int, optional
         The size of the rolling window, in days, over which to compute
-        beta (default 63 days).
+        beta (default 6 months).
 
     Returns
     -------
@@ -520,131 +531,345 @@ def rolling_beta(returns, benchmark_rets, rolling_window=63):
     Note
     -----
     See https://en.wikipedia.org/wiki/Beta_(finance) for more details.
-
     """
 
-    out = pd.Series(index=returns.index)
-    for beg, end in zip(returns.index[0:-rolling_window],
-                        returns.index[rolling_window:]):
-        out.loc[end] = calc_alpha_beta(returns.loc[beg:end],
-                                       benchmark_rets.loc[beg:end])[1]
+    if factor_returns.ndim > 1:
+        # Apply column-wise
+        return factor_returns.apply(partial(rolling_beta, returns),
+                                    rolling_window=rolling_window)
+    else:
+        out = pd.Series(index=returns.index)
+        for beg, end in zip(returns.index[0:-rolling_window],
+                            returns.index[rolling_window:]):
+            out.loc[end] = ep.beta(
+                returns.loc[beg:end],
+                factor_returns.loc[beg:end])
 
-    return out
+        return out
 
 
-def rolling_multifactor_beta(returns, df_multi_factor, rolling_window=63):
-    """Determines the rolling beta of multiple factors.
+def rolling_regression(returns, factor_returns,
+                       rolling_window=APPROX_BDAYS_PER_MONTH * 6,
+                       nan_threshold=0.1):
+    """
+    Computes rolling factor betas using a multivariate linear regression
+    (separate linear regressions is problematic because the factors may be
+    confounded).
 
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-    df_multi_factor : pd.DataFrame
-        Other factors over which to compute beta.
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+    factor_returns : pd.DataFrame
+        Daily noncumulative returns of the benchmark factor to which betas are
+        computed. Usually a benchmark such as market returns.
+         - Computes rolling beta for each column.
+         - This is in the same style as returns.
     rolling_window : int, optional
-        The size of the rolling window, in days, over which to compute
-        beta (default 63 days).
+        The days window over which to compute the beta. Defaults to 6 months.
+    nan_threshold : float, optional
+        If there are more than this fraction of NaNs, the rolling regression
+        for the given date will be skipped.
 
     Returns
     -------
-    pd.DataFrame
-        Rolling betas.
-
-    Note
-    -----
-
-    See https://en.wikipedia.org/wiki/Beta_(finance) for more details.
-
+    pandas.DataFrame
+        DataFrame containing rolling beta coefficients to SMB, HML and UMD
     """
 
-    out = pd.DataFrame(columns=['const'] + list(df_multi_factor.columns),
-                       index=returns.index)
+    # We need to drop NaNs to regress
+    ret_no_na = returns.dropna()
 
-    for beg, end in zip(returns.index[0:-rolling_window],
-                        returns.index[rolling_window:]):
-        out.loc[end] = calc_multifactor(returns.loc[beg:end],
-                                        df_multi_factor.loc[beg:end])
+    columns = ['alpha'] + factor_returns.columns.tolist()
+    rolling_risk = pd.DataFrame(columns=columns,
+                                index=ret_no_na.index)
 
-    return out
+    rolling_risk.index.name = 'dt'
+
+    for beg, end in zip(ret_no_na.index[:-rolling_window],
+                        ret_no_na.index[rolling_window:]):
+        returns_period = ret_no_na[beg:end]
+        factor_returns_period = factor_returns.loc[returns_period.index]
+
+        if np.all(factor_returns_period.isnull().mean()) < nan_threshold:
+            factor_returns_period_dnan = factor_returns_period.dropna()
+            reg = linear_model.LinearRegression(fit_intercept=True).fit(
+                factor_returns_period_dnan,
+                returns_period.loc[factor_returns_period_dnan.index])
+            rolling_risk.loc[end, factor_returns.columns] = reg.coef_
+            rolling_risk.loc[end, 'alpha'] = reg.intercept_
+
+    return rolling_risk
 
 
-def calc_alpha_beta(returns, benchmark_rets):
+def gross_lev(positions):
     """
-    Calculates both alpha and beta.
+    Calculates the gross leverage of a strategy.
+
+    Parameters
+    ----------
+    positions : pd.DataFrame
+        Daily net position values.
+         - See full explanation in tears.create_full_tear_sheet.
+
+    Returns
+    -------
+    pd.Series
+        Gross leverage.
+    """
+
+    exposure = positions.drop('cash', axis=1).abs().sum(axis=1)
+    return exposure / positions.sum(axis=1)
+
+
+def value_at_risk(returns, period=None, sigma=2.0):
+    """
+    Get value at risk (VaR).
 
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-    benchmark_rets : pd.Series
-        Daily non-cumulative returns of a benchmark.
-
-    Returns
-    -------
-    float
-        Alpha.
-    float
-        Beta.
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+    period : str, optional
+        Period over which to calculate VaR. Set to 'weekly',
+        'monthly', or 'yearly', otherwise defaults to period of
+        returns (typically daily).
+    sigma : float, optional
+        Standard deviations of VaR, default 2.
     """
+    if period is not None:
+        returns_agg = ep.aggregate_returns(returns, period)
+    else:
+        returns_agg = returns.copy()
 
-    ret_index = returns.index
-    beta, alpha = sp.stats.linregress(benchmark_rets.loc[ret_index].values,
-                                      returns.values)[:2]
-
-    return alpha * 252, beta
+    value_at_risk = returns_agg.mean() - sigma * returns_agg.std()
+    return value_at_risk
 
 
-def perf_stats(
-        returns,
-        returns_style='compound',
-        return_as_dict=False):
-    """Calculates various performance metrics of a strategy, for use in
+SIMPLE_STAT_FUNCS = [
+    ep.annual_return,
+    ep.cum_returns_final,
+    ep.annual_volatility,
+    ep.sharpe_ratio,
+    ep.calmar_ratio,
+    ep.stability_of_timeseries,
+    ep.max_drawdown,
+    ep.omega_ratio,
+    ep.sortino_ratio,
+    stats.skew,
+    stats.kurtosis,
+    ep.tail_ratio,
+    value_at_risk
+]
+
+FACTOR_STAT_FUNCS = [
+    ep.alpha,
+    ep.beta,
+]
+
+STAT_FUNC_NAMES = {
+    'annual_return': 'Annual return',
+    'cum_returns_final': 'Cumulative returns',
+    'annual_volatility': 'Annual volatility',
+    'sharpe_ratio': 'Sharpe ratio',
+    'calmar_ratio': 'Calmar ratio',
+    'stability_of_timeseries': 'Stability',
+    'max_drawdown': 'Max drawdown',
+    'omega_ratio': 'Omega ratio',
+    'sortino_ratio': 'Sortino ratio',
+    'skew': 'Skew',
+    'kurtosis': 'Kurtosis',
+    'tail_ratio': 'Tail ratio',
+    'common_sense_ratio': 'Common sense ratio',
+    'value_at_risk': 'Daily value at risk',
+    'alpha': 'Alpha',
+    'beta': 'Beta',
+}
+
+
+def perf_stats(returns, factor_returns=None, positions=None,
+               transactions=None, turnover_denom='AGB'):
+    """
+    Calculates various performance metrics of a strategy, for use in
     plotting.show_perf_stats.
 
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
-    returns_style : str, optional
-       See annual_returns' style
-    return_as_dict : boolean, optional
-       If True, returns the computed metrics in a dictionary.
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+    factor_returns : pd.Series, optional
+        Daily noncumulative returns of the benchmark factor to which betas are
+        computed. Usually a benchmark such as market returns.
+         - This is in the same style as returns.
+         - If None, do not compute alpha, beta, and information ratio.
+    positions : pd.DataFrame
+        Daily net position values.
+         - See full explanation in tears.create_full_tear_sheet.
+    transactions : pd.DataFrame
+        Prices and amounts of executed trades. One row per trade.
+        - See full explanation in tears.create_full_tear_sheet.
+    turnover_denom : str
+        Either AGB or portfolio_value, default AGB.
+        - See full explanation in txn.get_turnover.
 
     Returns
     -------
-    dict / pd.DataFrame
+    pd.Series
         Performance metrics.
-
     """
 
-    all_stats = {}
-    all_stats['annual_return'] = annual_return(
-        returns,
-        style=returns_style)
-    all_stats['annual_volatility'] = annual_volatility(returns)
-    all_stats['sharpe_ratio'] = sharpe_ratio(
-        returns,
-        returns_style=returns_style)
-    all_stats['calmar_ratio'] = calmar_ratio(
-        returns,
-        returns_style=returns_style)
-    all_stats['stability'] = stability_of_timeseries(returns)
-    all_stats['max_drawdown'] = max_drawdown(returns)
-    all_stats['omega_ratio'] = omega_ratio(returns)
-    all_stats['sortino_ratio'] = sortino_ratio(returns)
+    stats = pd.Series()
+    for stat_func in SIMPLE_STAT_FUNCS:
+        stats[STAT_FUNC_NAMES[stat_func.__name__]] = stat_func(returns)
 
-    if return_as_dict:
-        return all_stats
+    if positions is not None:
+        stats['Gross leverage'] = gross_lev(positions).mean()
+        if transactions is not None:
+            stats['Daily turnover'] = get_turnover(positions,
+                                                   transactions,
+                                                   turnover_denom).mean()
+    if factor_returns is not None:
+        for stat_func in FACTOR_STAT_FUNCS:
+            res = stat_func(returns, factor_returns)
+            stats[STAT_FUNC_NAMES[stat_func.__name__]] = res
+
+    return stats
+
+
+def perf_stats_bootstrap(returns, factor_returns=None, return_stats=True,
+                         **kwargs):
+    """Calculates various bootstrapped performance metrics of a strategy.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+    factor_returns : pd.Series, optional
+        Daily noncumulative returns of the benchmark factor to which betas are
+        computed. Usually a benchmark such as market returns.
+         - This is in the same style as returns.
+         - If None, do not compute alpha, beta, and information ratio.
+    return_stats : boolean (optional)
+        If True, returns a DataFrame of mean, median, 5 and 95 percentiles
+        for each perf metric.
+        If False, returns a DataFrame with the bootstrap samples for
+        each perf metric.
+
+    Returns
+    -------
+    pd.DataFrame
+        if return_stats is True:
+        - Distributional statistics of bootstrapped sampling
+        distribution of performance metrics.
+        if return_stats is False:
+        - Bootstrap samples for each performance metric.
+    """
+
+    bootstrap_values = OrderedDict()
+
+    for stat_func in SIMPLE_STAT_FUNCS:
+        stat_name = STAT_FUNC_NAMES[stat_func.__name__]
+        bootstrap_values[stat_name] = calc_bootstrap(stat_func,
+                                                     returns)
+
+    if factor_returns is not None:
+        for stat_func in FACTOR_STAT_FUNCS:
+            stat_name = STAT_FUNC_NAMES[stat_func.__name__]
+            bootstrap_values[stat_name] = calc_bootstrap(
+                stat_func,
+                returns,
+                factor_returns=factor_returns)
+
+    bootstrap_values = pd.DataFrame(bootstrap_values)
+
+    if return_stats:
+        stats = bootstrap_values.apply(calc_distribution_stats)
+        return stats.T[['mean', 'median', '5%', '95%']]
     else:
-        all_stats_df = pd.DataFrame(
-            index=list(all_stats.keys()),
-            data=list(all_stats.values()))
-        all_stats_df.columns = ['perf_stats']
-        return all_stats_df
+        return bootstrap_values
+
+
+def calc_bootstrap(func, returns, *args, **kwargs):
+    """Performs a bootstrap analysis on a user-defined function returning
+    a summary statistic.
+
+    Parameters
+    ----------
+    func : function
+        Function that either takes a single array (commonly returns)
+        or two arrays (commonly returns and factor returns) and
+        returns a single value (commonly a summary
+        statistic). Additional args and kwargs are passed as well.
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+    factor_returns : pd.Series, optional
+        Daily noncumulative returns of the benchmark factor to which betas are
+        computed. Usually a benchmark such as market returns.
+         - This is in the same style as returns.
+    n_samples : int, optional
+        Number of bootstrap samples to draw. Default is 1000.
+        Increasing this will lead to more stable / accurate estimates.
+
+    Returns
+    -------
+    numpy.ndarray
+        Bootstrapped sampling distribution of passed in func.
+    """
+
+    n_samples = kwargs.pop('n_samples', 1000)
+    out = np.empty(n_samples)
+
+    factor_returns = kwargs.pop('factor_returns', None)
+
+    for i in range(n_samples):
+        idx = np.random.randint(len(returns), size=len(returns))
+        returns_i = returns.iloc[idx].reset_index(drop=True)
+        if factor_returns is not None:
+            factor_returns_i = factor_returns.iloc[idx].reset_index(drop=True)
+            out[i] = func(returns_i, factor_returns_i,
+                          *args, **kwargs)
+        else:
+            out[i] = func(returns_i,
+                          *args, **kwargs)
+
+    return out
+
+
+def calc_distribution_stats(x):
+    """Calculate various summary statistics of data.
+
+    Parameters
+    ----------
+    x : numpy.ndarray or pandas.Series
+        Array to compute summary statistics for.
+
+    Returns
+    -------
+    pandas.Series
+        Series containing mean, median, std, as well as 5, 25, 75 and
+        95 percentiles of passed in values.
+    """
+
+    return pd.Series({'mean': np.mean(x),
+                      'median': np.median(x),
+                      'std': np.std(x),
+                      '5%': np.percentile(x, 5),
+                      '25%': np.percentile(x, 25),
+                      '75%': np.percentile(x, 75),
+                      '95%': np.percentile(x, 95),
+                      'IQR': np.subtract.reduce(
+                          np.percentile(x, [75, 25])),
+                      })
 
 
 def get_max_drawdown_underwater(underwater):
-    """Determines peak, valley, and recovery dates given and 'underwater'
+    """
+    Determines peak, valley, and recovery dates given an 'underwater'
     DataFrame.
 
     An underwater DataFrame is a DataFrame that has precomputed
@@ -663,10 +888,9 @@ def get_max_drawdown_underwater(underwater):
         The maximum drawdown's valley.
     recovery : datetime
         The maximum drawdown's recovery.
-
     """
 
-    valley = np.argmax(underwater)  # end of the period
+    valley = underwater.idxmin()  # end of the period
     # Find first 0
     peak = underwater[:valley][underwater[:valley] == 0].index[-1]
     # Find last 0
@@ -679,21 +903,18 @@ def get_max_drawdown_underwater(underwater):
 
 def get_max_drawdown(returns):
     """
-    Finds maximum drawdown.
+    Determines the maximum drawdown of a strategy.
 
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
+        Daily returns of the strategy, noncumulative.
+        - See full explanation in :func:`~pyfolio.timeseries.cum_returns`.
 
     Returns
     -------
-    peak : datetime
-        The maximum drawdown's peak.
-    valley : datetime
-        The maximum drawdown's valley.
-    recovery : datetime
-        The maximum drawdown's recovery.
+    float
+        Maximum drawdown.
 
     Note
     -----
@@ -703,7 +924,7 @@ def get_max_drawdown(returns):
     returns = returns.copy()
     df_cum = cum_returns(returns, 1.0)
     running_max = np.maximum.accumulate(df_cum)
-    underwater = (running_max - df_cum) / running_max
+    underwater = df_cum / running_max - 1
     return get_max_drawdown_underwater(underwater)
 
 
@@ -714,7 +935,8 @@ def get_top_drawdowns(returns, top=10):
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
     top : int, optional
         The amount of top drawdowns to find (default 10).
 
@@ -725,24 +947,25 @@ def get_top_drawdowns(returns, top=10):
     """
 
     returns = returns.copy()
-    df_cum = cum_returns(returns, 1.0)
+    df_cum = ep.cum_returns(returns, 1.0)
     running_max = np.maximum.accumulate(df_cum)
-    underwater = running_max - df_cum
+    underwater = df_cum / running_max - 1
 
     drawdowns = []
-    for t in range(top):
+    for _ in range(top):
         peak, valley, recovery = get_max_drawdown_underwater(underwater)
         # Slice out draw-down period
         if not pd.isnull(recovery):
-            underwater = pd.concat(
-                [underwater.loc[:peak].iloc[:-1],
-                 underwater.loc[recovery:].iloc[1:]])
+            underwater.drop(underwater[peak: recovery].index[1:-1],
+                            inplace=True)
         else:
             # drawdown has not ended yet
             underwater = underwater.loc[:peak]
 
         drawdowns.append((peak, valley, recovery))
-        if len(returns) == 0:
+        if ((len(returns) == 0)
+                or (len(underwater) == 0)
+                or (np.min(underwater) == 0)):
             break
 
     return drawdowns
@@ -755,7 +978,8 @@ def gen_drawdown_table(returns, top=10):
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
     top : int, optional
         The amount of top drawdowns to find (default 10).
 
@@ -765,39 +989,62 @@ def gen_drawdown_table(returns, top=10):
         Information about top drawdowns.
     """
 
-    df_cum = cum_returns(returns, 1.0)
+    df_cum = ep.cum_returns(returns, 1.0)
     drawdown_periods = get_top_drawdowns(returns, top=top)
     df_drawdowns = pd.DataFrame(index=list(range(top)),
-                                columns=['net drawdown in %',
-                                         'peak date',
-                                         'valley date',
-                                         'recovery date',
-                                         'duration'])
+                                columns=['Net drawdown in %',
+                                         'Peak date',
+                                         'Valley date',
+                                         'Recovery date',
+                                         'Duration'])
 
     for i, (peak, valley, recovery) in enumerate(drawdown_periods):
         if pd.isnull(recovery):
-            df_drawdowns.loc[i, 'duration'] = np.nan
+            df_drawdowns.loc[i, 'Duration'] = np.nan
         else:
-            df_drawdowns.loc[i, 'duration'] = len(pd.date_range(peak,
+            df_drawdowns.loc[i, 'Duration'] = len(pd.date_range(peak,
                                                                 recovery,
                                                                 freq='B'))
-        df_drawdowns.loc[i, 'peak date'] = peak
-        df_drawdowns.loc[i, 'valley date'] = valley
-        df_drawdowns.loc[i, 'recovery date'] = recovery
-        df_drawdowns.loc[i, 'net drawdown in %'] = (
+        df_drawdowns.loc[i, 'Peak date'] = (peak.to_pydatetime()
+                                            .strftime('%Y-%m-%d'))
+        df_drawdowns.loc[i, 'Valley date'] = (valley.to_pydatetime()
+                                              .strftime('%Y-%m-%d'))
+        if isinstance(recovery, float):
+            df_drawdowns.loc[i, 'Recovery date'] = recovery
+        else:
+            df_drawdowns.loc[i, 'Recovery date'] = (recovery.to_pydatetime()
+                                                    .strftime('%Y-%m-%d'))
+        df_drawdowns.loc[i, 'Net drawdown in %'] = (
             (df_cum.loc[peak] - df_cum.loc[valley]) / df_cum.loc[peak]) * 100
 
-    df_drawdowns['peak date'] = pd.to_datetime(
-        df_drawdowns['peak date'],
-        unit='D')
-    df_drawdowns['valley date'] = pd.to_datetime(
-        df_drawdowns['valley date'],
-        unit='D')
-    df_drawdowns['recovery date'] = pd.to_datetime(
-        df_drawdowns['recovery date'],
-        unit='D')
+    df_drawdowns['Peak date'] = pd.to_datetime(df_drawdowns['Peak date'])
+    df_drawdowns['Valley date'] = pd.to_datetime(df_drawdowns['Valley date'])
+    df_drawdowns['Recovery date'] = pd.to_datetime(
+        df_drawdowns['Recovery date'])
 
     return df_drawdowns
+
+
+def rolling_volatility(returns, rolling_vol_window):
+    """
+    Determines the rolling volatility of a strategy.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+    rolling_vol_window : int
+        Length of rolling window, in days, over which to compute.
+
+    Returns
+    -------
+    pd.Series
+        Rolling volatility.
+    """
+
+    return returns.rolling(rolling_vol_window).std() \
+        * np.sqrt(APPROX_BDAYS_PER_YEAR)
 
 
 def rolling_sharpe(returns, rolling_sharpe_window):
@@ -807,7 +1054,8 @@ def rolling_sharpe(returns, rolling_sharpe_window):
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
     rolling_sharpe_window : int
         Length of rolling window, in days, over which to compute.
 
@@ -821,208 +1069,159 @@ def rolling_sharpe(returns, rolling_sharpe_window):
     See https://en.wikipedia.org/wiki/Sharpe_ratio for more details.
     """
 
-    return pd.rolling_mean(returns, rolling_sharpe_window) \
-        / pd.rolling_std(returns, rolling_sharpe_window) * np.sqrt(252)
+    return returns.rolling(rolling_sharpe_window).mean() \
+        / returns.rolling(rolling_sharpe_window).std() \
+        * np.sqrt(APPROX_BDAYS_PER_YEAR)
 
 
-def cone_rolling(
-        input_rets,
-        num_stdev=1.0,
-        warm_up_days_pct=0.5,
-        std_scale_factor=252,
-        update_std_oos_rolling=False,
-        cone_fit_end_date=None,
-        extend_fit_trend=True,
-        create_future_cone=True):
-    """Computes a rolling cone to place in the cumulative returns
-    plot. See plotting.plot_rolling_returns.
+def simulate_paths(is_returns, num_days,
+                   starting_value=1, num_samples=1000, random_seed=None):
     """
+    Gnerate alternate paths using available values from in-sample returns.
 
-    # if specifying 'cone_fit_end_date' please use a pandas compatible format,
-    # e.g. '2015-8-4', 'YYYY-MM-DD'
-
-    warm_up_days = int(warm_up_days_pct * input_rets.size)
-
-    # create initial linear fit from beginning of timeseries thru warm_up_days
-    # or the specified 'cone_fit_end_date'
-    if cone_fit_end_date is None:
-        returns = input_rets[:warm_up_days]
-    else:
-        returns = input_rets[input_rets.index < cone_fit_end_date]
-
-    perf_ts = cum_returns(returns, 1)
-
-    X = list(range(0, perf_ts.size))
-    X = sm.add_constant(X)
-    sm.OLS(perf_ts, list(range(0, len(perf_ts))))
-    line_ols = sm.OLS(perf_ts.values, X).fit()
-    fit_line_ols_coef = line_ols.params[1]
-    fit_line_ols_inter = line_ols.params[0]
-
-    x_points = list(range(0, perf_ts.size))
-    x_points = np.array(x_points) * fit_line_ols_coef + fit_line_ols_inter
-
-    perf_ts_r = pd.DataFrame(perf_ts)
-    perf_ts_r.columns = ['perf']
-
-    warm_up_std_pct = np.std(perf_ts.pct_change().dropna())
-    std_pct = warm_up_std_pct * np.sqrt(std_scale_factor)
-
-    perf_ts_r['line'] = x_points
-    perf_ts_r['sd_up'] = perf_ts_r['line'] * (1 + num_stdev * std_pct)
-    perf_ts_r['sd_down'] = perf_ts_r['line'] * (1 - num_stdev * std_pct)
-
-    std_pct = warm_up_std_pct * np.sqrt(std_scale_factor)
-
-    last_backtest_day_index = returns.index[-1]
-    cone_end_rets = input_rets[input_rets.index > last_backtest_day_index]
-    new_cone_day_scale_factor = int(1)
-    oos_intercept_shift = perf_ts_r.perf[-1] - perf_ts_r.line[-1]
-
-    # make the cone for the out-of-sample/live papertrading period
-    for i in cone_end_rets.index:
-        returns = input_rets[:i]
-        perf_ts = cum_returns(returns, 1)
-
-        if extend_fit_trend:
-            line_ols_coef = fit_line_ols_coef
-            line_ols_inter = fit_line_ols_inter
-        else:
-            X = list(range(0, perf_ts.size))
-            X = sm.add_constant(X)
-            sm.OLS(perf_ts, list(range(0, len(perf_ts))))
-            line_ols = sm.OLS(perf_ts.values, X).fit()
-            line_ols_coef = line_ols.params[1]
-            line_ols_inter = line_ols.params[0]
-
-        x_points = list(range(0, perf_ts.size))
-        x_points = np.array(x_points) * line_ols_coef + \
-            line_ols_inter + oos_intercept_shift
-
-        temp_line = x_points
-        if update_std_oos_rolling:
-            std_pct = np.sqrt(new_cone_day_scale_factor) * \
-                np.std(perf_ts.pct_change().dropna())
-        else:
-            std_pct = np.sqrt(new_cone_day_scale_factor) * warm_up_std_pct
-
-        temp_sd_up = temp_line * (1 + num_stdev * std_pct)
-        temp_sd_down = temp_line * (1 - num_stdev * std_pct)
-
-        new_daily_cone = pd.DataFrame(index=[i],
-                                      data={'perf': perf_ts[i],
-                                            'line': temp_line[-1],
-                                            'sd_up': temp_sd_up[-1],
-                                            'sd_down': temp_sd_down[-1]})
-
-        perf_ts_r = perf_ts_r.append(new_daily_cone)
-        new_cone_day_scale_factor += 1
-
-    if create_future_cone:
-        extend_ahead_days = 252
-        future_cone_dates = pd.date_range(
-            cone_end_rets.index[-1], periods=extend_ahead_days, freq='B')
-
-        future_cone_intercept_shift = perf_ts_r.perf[-1] - perf_ts_r.line[-1]
-
-        future_days_scale_factor = np.linspace(
-            1,
-            extend_ahead_days,
-            extend_ahead_days)
-        std_pct = np.sqrt(future_days_scale_factor) * warm_up_std_pct
-
-        x_points = list(range(perf_ts.size, perf_ts.size + extend_ahead_days))
-        x_points = np.array(x_points) * line_ols_coef + line_ols_inter + \
-            oos_intercept_shift + future_cone_intercept_shift
-        temp_line = x_points
-        temp_sd_up = temp_line * (1 + num_stdev * std_pct)
-        temp_sd_down = temp_line * (1 - num_stdev * std_pct)
-
-        future_cone = pd.DataFrame(index=list(map(np.datetime64,
-                                                  future_cone_dates)),
-                                   data={'perf': temp_line,
-                                         'line': temp_line,
-                                         'sd_up': temp_sd_up,
-                                         'sd_down': temp_sd_down})
-
-        perf_ts_r = perf_ts_r.append(future_cone)
-
-    return perf_ts_r
-
-
-def gen_date_ranges_interesting():
-    """Generates a list of historical event dates that may have had
-    significant impact on markets.  See
-    extract_interesting_date_ranges.
+    Parameters
+    ----------
+    is_returns : pandas.core.frame.DataFrame
+        Non-cumulative in-sample returns.
+    num_days : int
+        Number of days to project the probability cone forward.
+    starting_value : int or float
+        Starting value of the out of sample period.
+    num_samples : int
+        Number of samples to draw from the in-sample daily returns.
+        Each sample will be an array with length num_days.
+        A higher number of samples will generate a more accurate
+        bootstrap cone.
+    random_seed : int
+        Seed for the pseudorandom number generator used by the pandas
+        sample method.
 
     Returns
     -------
-    periods : OrderedDict
-        Significant events.
-
+    samples : numpy.ndarray
     """
 
-    periods = OrderedDict()
-    # Dotcom bubble
-    periods['Dotcom'] = (pd.Timestamp('20000310'), pd.Timestamp('20000910'))
+    samples = np.empty((num_samples, num_days))
+    seed = np.random.RandomState(seed=random_seed)
+    for i in range(num_samples):
+        samples[i, :] = is_returns.sample(num_days, replace=True,
+                                          random_state=seed)
 
-    # Lehmann Brothers
-    periods['Lehmann'] = (pd.Timestamp('20080801'), pd.Timestamp('20081001'))
-
-    # 9/11
-    periods['9/11'] = (pd.Timestamp('20010911'), pd.Timestamp('20011011'))
-
-    # 05/08/11  US down grade and European Debt Crisis 2011
-    periods[
-        'US downgrade/European Debt Crisis'] = (pd.Timestamp('20110805'),
-                                                pd.Timestamp('20110905'))
-
-    # 16/03/11  Fukushima melt down 2011
-    periods['Fukushima'] = (pd.Timestamp('20110316'), pd.Timestamp('20110416'))
-
-    # 01/08/03  US Housing Bubble 2003
-    periods['US Housing'] = (
-        pd.Timestamp('20030108'), pd.Timestamp('20030208'))
-
-    # 06/09/12  EZB IR Event 2012
-    periods['EZB IR Event'] = (
-        pd.Timestamp('20120910'), pd.Timestamp('20121010'))
-
-    # August 2007, March and September of 2008, Q1 & Q2 2009,
-    periods['Aug07'] = (pd.Timestamp('20070801'), pd.Timestamp('20070901'))
-    periods['Mar08'] = (pd.Timestamp('20080301'), pd.Timestamp('20070401'))
-    periods['Sept08'] = (pd.Timestamp('20080901'), pd.Timestamp('20081001'))
-    periods['2009Q1'] = (pd.Timestamp('20090101'), pd.Timestamp('20090301'))
-    periods['2009Q2'] = (pd.Timestamp('20090301'), pd.Timestamp('20090601'))
-
-    # Flash Crash (May 6, 2010 + 1 week post),
-    periods['Flash Crash'] = (
-        pd.Timestamp('20100505'), pd.Timestamp('20100510'))
-
-    # April and October 2014).
-    periods['Apr14'] = (pd.Timestamp('20140401'), pd.Timestamp('20140501'))
-    periods['Oct14'] = (pd.Timestamp('20141001'), pd.Timestamp('20141101'))
-
-    return periods
+    return samples
 
 
-def extract_interesting_date_ranges(returns):
-    """Extracts returns based on interesting events. See
+def summarize_paths(samples, cone_std=(1., 1.5, 2.), starting_value=1.):
+    """
+    Gnerate the upper and lower bounds of an n standard deviation
+    cone of forecasted cumulative returns.
+
+    Parameters
+    ----------
+    samples : numpy.ndarray
+        Alternative paths, or series of possible outcomes.
+    cone_std : list of int/float
+        Number of standard devations to use in the boundaries of
+        the cone. If multiple values are passed, cone bounds will
+        be generated for each value.
+
+    Returns
+    -------
+    samples : pandas.core.frame.DataFrame
+    """
+
+    cum_samples = ep.cum_returns(samples.T,
+                                 starting_value=starting_value).T
+
+    cum_mean = cum_samples.mean(axis=0)
+    cum_std = cum_samples.std(axis=0)
+
+    if isinstance(cone_std, (float, int)):
+        cone_std = [cone_std]
+
+    cone_bounds = pd.DataFrame(columns=pd.Float64Index([]))
+    for num_std in cone_std:
+        cone_bounds.loc[:, float(num_std)] = cum_mean + cum_std * num_std
+        cone_bounds.loc[:, float(-num_std)] = cum_mean - cum_std * num_std
+
+    return cone_bounds
+
+
+def forecast_cone_bootstrap(is_returns, num_days, cone_std=(1., 1.5, 2.),
+                            starting_value=1, num_samples=1000,
+                            random_seed=None):
+    """
+    Determines the upper and lower bounds of an n standard deviation
+    cone of forecasted cumulative returns. Future cumulative mean and
+    standard devation are computed by repeatedly sampling from the
+    in-sample daily returns (i.e. bootstrap). This cone is non-parametric,
+    meaning it does not assume that returns are normally distributed.
+
+    Parameters
+    ----------
+    is_returns : pd.Series
+        In-sample daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+    num_days : int
+        Number of days to project the probability cone forward.
+    cone_std : int, float, or list of int/float
+        Number of standard devations to use in the boundaries of
+        the cone. If multiple values are passed, cone bounds will
+        be generated for each value.
+    starting_value : int or float
+        Starting value of the out of sample period.
+    num_samples : int
+        Number of samples to draw from the in-sample daily returns.
+        Each sample will be an array with length num_days.
+        A higher number of samples will generate a more accurate
+        bootstrap cone.
+    random_seed : int
+        Seed for the pseudorandom number generator used by the pandas
+        sample method.
+
+    Returns
+    -------
+    pd.DataFrame
+        Contains upper and lower cone boundaries. Column names are
+        strings corresponding to the number of standard devations
+        above (positive) or below (negative) the projected mean
+        cumulative returns.
+    """
+
+    samples = simulate_paths(
+        is_returns=is_returns,
+        num_days=num_days,
+        starting_value=starting_value,
+        num_samples=num_samples,
+        random_seed=random_seed
+    )
+
+    cone_bounds = summarize_paths(
+        samples=samples,
+        cone_std=cone_std,
+        starting_value=starting_value
+    )
+
+    return cone_bounds
+
+
+def extract_interesting_date_ranges(returns, periods=None):
+    """
+    Extracts returns based on interesting events. See
     gen_date_range_interesting.
 
     Parameters
     ----------
     returns : pd.Series
-       Daily returns of the strategy, non-cumulative.
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
 
     Returns
     -------
     ranges : OrderedDict
         Date ranges, with returns, of all valid events.
-
     """
-
-    periods = gen_date_ranges_interesting()
+    if periods is None:
+        periods = PERIODS
     returns_dupe = returns.copy()
     returns_dupe.index = returns_dupe.index.map(pd.Timestamp)
     ranges = OrderedDict()
@@ -1032,38 +1231,7 @@ def extract_interesting_date_ranges(returns):
             if len(period) == 0:
                 continue
             ranges[name] = period
-        except:
+        except BaseException:
             continue
 
     return ranges
-
-
-def portfolio_returns(holdings_returns, exclude_non_overlapping=True):
-    """Generates an equal-weight portfolio.
-
-    Parameters
-    ----------
-    holdings_returns : list
-       List containing each individual holding's daily returns of the
-       strategy, non-cumulative.
-
-    exclude_non_overlapping : boolean, optional
-       If True, timeseries returned will include values only for dates
-       available across all holdings_returns timeseries If False, 0%
-       returns will be assumed for a holding until it has valid data
-
-    Returns
-    -------
-    pd.Series
-        Equal-weight returns timeseries.
-    """
-    port = holdings_returns[0]
-    for i in range(1, len(holdings_returns)):
-        port = port + holdings_returns[i]
-
-    if exclude_non_overlapping:
-        port = port.dropna()
-    else:
-        port = port.fillna(0)
-
-    return port / len(holdings_returns)

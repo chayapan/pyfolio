@@ -1,16 +1,88 @@
 from __future__ import division
 
+import os
 from unittest import TestCase
 from nose_parameterized import parameterized
+from numpy.testing import assert_allclose, assert_almost_equal
+from pandas.util.testing import assert_series_equal
 
 import numpy as np
 import pandas as pd
-import pandas.util.testing as pdt
 
 from .. import timeseries
+from pyfolio.utils import to_utc, to_series
+import gzip
+
+
+DECIMAL_PLACES = 8
 
 
 class TestDrawdown(TestCase):
+    drawdown_list = np.array(
+        [100, 90, 75]
+    ) / 10.
+    dt = pd.date_range('2000-1-3', periods=3, freq='D')
+
+    drawdown_serie = pd.Series(drawdown_list, index=dt)
+
+    @parameterized.expand([
+        (drawdown_serie,)
+    ])
+    def test_get_max_drawdown_begins_first_day(self, px):
+        rets = px.pct_change()
+        drawdowns = timeseries.gen_drawdown_table(rets, top=1)
+        self.assertEqual(drawdowns.loc[0, 'Net drawdown in %'], 25)
+
+    drawdown_list = np.array(
+        [100, 110, 120, 150, 180, 200, 100, 120,
+         160, 180, 200, 300, 400, 500, 600, 800,
+         900, 1000, 650, 600]
+    ) / 10.
+    dt = pd.date_range('2000-1-3', periods=20, freq='D')
+
+    drawdown_serie = pd.Series(drawdown_list, index=dt)
+
+    @parameterized.expand([
+        (drawdown_serie,
+         pd.Timestamp('2000-01-08'),
+         pd.Timestamp('2000-01-09'),
+         pd.Timestamp('2000-01-13'),
+         50,
+         pd.Timestamp('2000-01-20'),
+         pd.Timestamp('2000-01-22'),
+         None,
+         40
+         )
+    ])
+    def test_gen_drawdown_table_relative(
+            self, px,
+            first_expected_peak, first_expected_valley,
+            first_expected_recovery, first_net_drawdown,
+            second_expected_peak, second_expected_valley,
+            second_expected_recovery, second_net_drawdown
+    ):
+
+        rets = px.pct_change()
+
+        drawdowns = timeseries.gen_drawdown_table(rets, top=2)
+
+        self.assertEqual(np.round(drawdowns.loc[0, 'Net drawdown in %']),
+                         first_net_drawdown)
+        self.assertEqual(drawdowns.loc[0, 'Peak date'],
+                         first_expected_peak)
+        self.assertEqual(drawdowns.loc[0, 'Valley date'],
+                         first_expected_valley)
+        self.assertEqual(drawdowns.loc[0, 'Recovery date'],
+                         first_expected_recovery)
+
+        self.assertEqual(np.round(drawdowns.loc[1, 'Net drawdown in %']),
+                         second_net_drawdown)
+        self.assertEqual(drawdowns.loc[1, 'Peak date'],
+                         second_expected_peak)
+        self.assertEqual(drawdowns.loc[1, 'Valley date'],
+                         second_expected_valley)
+        self.assertTrue(pd.isnull(drawdowns.loc[1, 'Recovery date']))
+
     px_list_1 = np.array(
         [100, 120, 100, 80, 70, 110, 180, 150]) / 100.  # Simple
     px_list_2 = np.array(
@@ -37,8 +109,8 @@ class TestDrawdown(TestCase):
         # Need to use isnull because the result can be NaN, NaT, etc.
         self.assertTrue(
             pd.isnull(peak)) if expected_peak is None else self.assertEqual(
-            peak,
-            expected_peak)
+                peak,
+                expected_peak)
         self.assertTrue(
             pd.isnull(valley)) if expected_valley is None else \
             self.assertEqual(
@@ -74,37 +146,44 @@ class TestDrawdown(TestCase):
             pd.isnull(
                 drawdowns.loc[
                     0,
-                    'peak date'])) if expected_peak is None \
-            else self.assertEqual(drawdowns.loc[0, 'peak date'],
+                    'Peak date'])) if expected_peak is None \
+            else self.assertEqual(drawdowns.loc[0, 'Peak date'],
                                   expected_peak)
         self.assertTrue(
             pd.isnull(
-                drawdowns.loc[0, 'valley date'])) \
+                drawdowns.loc[0, 'Valley date'])) \
             if expected_valley is None else self.assertEqual(
-                drawdowns.loc[0, 'valley date'],
+                drawdowns.loc[0, 'Valley date'],
                 expected_valley)
         self.assertTrue(
             pd.isnull(
-                drawdowns.loc[0, 'recovery date'])) \
+                drawdowns.loc[0, 'Recovery date'])) \
             if expected_recovery is None else self.assertEqual(
-                drawdowns.loc[0, 'recovery date'],
+                drawdowns.loc[0, 'Recovery date'],
                 expected_recovery)
         self.assertTrue(
-            pd.isnull(drawdowns.loc[0, 'duration'])) \
+            pd.isnull(drawdowns.loc[0, 'Duration'])) \
             if expected_duration is None else self.assertEqual(
-                drawdowns.loc[0, 'duration'], expected_duration)
+                drawdowns.loc[0, 'Duration'], expected_duration)
 
-    @parameterized.expand([
-        (pd.Series(px_list_1 - 1, index=dt), -0.44000000000000011)
-    ])
-    def test_max_drawdown(self, returns, expected):
-        self.assertEqual(timeseries.max_drawdown(returns), expected)
-
-    @parameterized.expand([
-        (pd.Series(px_list_1 - 1, index=dt), -0.44000000000000011)
-    ])
-    def test_max_drawdown_underwater(self, underwater, expected):
-        self.assertEqual(timeseries.max_drawdown(underwater), expected)
+    def test_drawdown_overlaps(self):
+        rand = np.random.RandomState(1337)
+        n_samples = 252 * 5
+        spy_returns = pd.Series(
+            rand.standard_t(3.1, n_samples),
+            pd.date_range('2005-01-02', periods=n_samples),
+        )
+        spy_drawdowns = timeseries.gen_drawdown_table(
+            spy_returns,
+            top=20).sort_values(by='Peak date')
+        # Compare the recovery date of each drawdown with the peak of the next
+        # Last pair might contain a NaT if drawdown didn't finish, so ignore it
+        pairs = list(zip(spy_drawdowns['Recovery date'],
+                         spy_drawdowns['Peak date'].shift(-1)))[:-1]
+        self.assertGreater(len(pairs), 0)
+        for recovery, peak in pairs:
+            if not pd.isnull(recovery):
+                self.assertLessEqual(recovery, peak)
 
     @parameterized.expand([
         (pd.Series(px_list_1,
@@ -120,20 +199,6 @@ class TestDrawdown(TestCase):
                 returns,
                 top=top),
             expected)
-
-
-class TestCumReturns(TestCase):
-    dt = pd.date_range('2000-1-3', periods=3, freq='D')
-
-    @parameterized.expand([
-        (pd.Series([.1, -.05, .1], index=dt),
-         pd.Series([1.1, 1.1 * .95, 1.1 * .95 * 1.1], index=dt), 1.),
-        (pd.Series([np.nan, -.05, .1], index=dt),
-         pd.Series([1., 1. * .95, 1. * .95 * 1.1], index=dt), 1.),
-    ])
-    def test_expected_result(self, input, expected, starting_value):
-        output = timeseries.cum_returns(input, starting_value=starting_value)
-        pdt.assert_series_equal(output, expected)
 
 
 class TestVariance(TestCase):
@@ -163,27 +228,6 @@ class TestNormalize(TestCase):
         self.assertTrue(timeseries.normalize(returns).equals(expected))
 
 
-class TestAggregateReturns(TestCase):
-    simple_rets = pd.Series(
-        [0.1] * 3 + [0] * 497,
-        pd.date_range(
-            '2000-1-3',
-            periods=500,
-            freq='D'))
-
-    @parameterized.expand([
-        (simple_rets, 'yearly', [0.3310000000000004, 0.0]),
-        (simple_rets[:100], 'monthly', [0.3310000000000004, 0.0, 0.0, 0.0]),
-        (simple_rets[:20], 'weekly', [0.3310000000000004, 0.0, 0.0])
-    ])
-    def test_aggregate_rets(self, returns, convert_to, expected):
-        self.assertEqual(
-            timeseries.aggregate_returns(
-                returns,
-                convert_to).values.tolist(),
-            expected)
-
-
 class TestStats(TestCase):
     simple_rets = pd.Series(
         [0.1] * 3 + [0] * 497,
@@ -191,6 +235,21 @@ class TestStats(TestCase):
             '2000-1-3',
             periods=500,
             freq='D'))
+
+    simple_week_rets = pd.Series(
+        [0.1] * 3 + [0] * 497,
+        pd.date_range(
+            '2000-1-31',
+            periods=500,
+            freq='W'))
+
+    simple_month_rets = pd.Series(
+        [0.1] * 3 + [0] * 497,
+        pd.date_range(
+            '2000-1-31',
+            periods=500,
+            freq='M'))
+
     simple_benchmark = pd.Series(
         [0.03] * 4 + [0] * 496,
         pd.date_range(
@@ -201,139 +260,110 @@ class TestStats(TestCase):
         [10, -10, 10]) / 100.  # Ends in drawdown
     dt = pd.date_range('2000-1-3', periods=3, freq='D')
 
-    @parameterized.expand([
-        (simple_rets, 'calendar', 0.10584000000000014),
-        (simple_rets, 'compound', 0.16317653888658334),
-        (simple_rets, 'calendar', 0.10584000000000014),
-        (simple_rets, 'compound', 0.16317653888658334)
-    ])
-    def test_annual_ret(self, returns, style, expected):
-        self.assertEqual(
-            timeseries.annual_return(
-                returns,
-                style=style),
-            expected)
+    px_list_2 = [1.0, 1.2, 1.0, 0.8, 0.7, 0.8, 0.8, 0.8]
+    dt_2 = pd.date_range('2000-1-3', periods=8, freq='D')
 
     @parameterized.expand([
-        (simple_rets, 0.12271674212427248),
-        (simple_rets, 0.12271674212427248)
-    ])
-    def test_annual_volatility(self, returns, expected):
-        self.assertEqual(timeseries.annual_volatility(returns), expected)
-
-    @parameterized.expand([
-        (simple_rets, 'calendar', 0.8624740045072119),
-        (simple_rets, 'compound', 1.3297007080039505)
-    ])
-    def test_sharpe(self, returns, returns_style, expected):
-        self.assertEqual(
-            timeseries.sharpe_ratio(
-                returns,
-                returns_style=returns_style),
-            expected)
-
-    @parameterized.expand([
-        (simple_rets[:5], 2, '[nan, inf, inf, 11.224972160321828, inf]')
+        (simple_rets[:5], 2, [np.nan, np.inf, np.inf, 11.224972160321, np.inf])
     ])
     def test_sharpe_2(self, returns, rolling_sharpe_window, expected):
-        self.assertEqual(str(timeseries.rolling_sharpe(
-            returns, rolling_sharpe_window).values.tolist()), expected)
+        np.testing.assert_array_almost_equal(
+            timeseries.rolling_sharpe(returns,
+                                      rolling_sharpe_window).values,
+            np.asarray(expected))
 
     @parameterized.expand([
-        (simple_rets, True, 0.010766923838471554)
-    ])
-    def test_stability_of_timeseries(self, returns, logValue, expected):
-        self.assertEqual(
-            timeseries.stability_of_timeseries(
-                returns,
-                logValue=logValue),
-            expected)
-
-    @parameterized.expand([
-        (simple_rets[:5], simple_benchmark[:5], 2, 8.024708101613483e-32)
+        (simple_rets[:5], simple_benchmark, 2, 0)
     ])
     def test_beta(self, returns, benchmark_rets, rolling_window, expected):
-        self.assertEqual(
-            timeseries.rolling_beta(
-                returns,
-                benchmark_rets,
-                rolling_window=rolling_window).values.tolist()[2],
-            expected)
+        actual = timeseries.rolling_beta(
+            returns,
+            benchmark_rets,
+            rolling_window=rolling_window,
+        ).values.tolist()[2]
 
+        np.testing.assert_almost_equal(actual, expected)
+
+
+class TestCone(TestCase):
+    def test_bootstrap_cone_against_linear_cone_normal_returns(self):
+        random_seed = 100
+        np.random.seed(random_seed)
+        days_forward = 200
+        cone_stdevs = (1., 1.5, 2.)
+        mu = .005
+        sigma = .002
+        rets = pd.Series(np.random.normal(mu, sigma, 10000))
+
+        midline = np.cumprod(1 + (rets.mean() * np.ones(days_forward)))
+        stdev = rets.std() * midline * np.sqrt(np.arange(days_forward)+1)
+
+        normal_cone = pd.DataFrame(columns=pd.Float64Index([]))
+        for s in cone_stdevs:
+            normal_cone[s] = midline + s * stdev
+            normal_cone[-s] = midline - s * stdev
+
+        bootstrap_cone = timeseries.forecast_cone_bootstrap(
+            rets, days_forward, cone_stdevs, starting_value=1,
+            random_seed=random_seed, num_samples=10000)
+
+        for col, vals in bootstrap_cone.iteritems():
+            expected = normal_cone[col].values
+            assert_allclose(vals.values, expected, rtol=.005)
+
+
+class TestBootstrap(TestCase):
     @parameterized.expand([
-        (pd.Series(px_list,
-                   index=dt), 'calendar', -8.3999999999999559),
-        (pd.Series(px_list,
-                   index=dt), 'arithmetic', 84.000000000000014)
+        (0., 1., 1000),
+        (1., 2., 500),
+        (-1., 0.1, 10),
     ])
-    def test_calmar(self, returns, returns_style, expected):
-        self.assertEqual(
-            timeseries.calmar_ratio(
-                returns,
-                returns_style=returns_style),
-            expected)
+    def test_calc_bootstrap(self, true_mean, true_sd, n):
+        """Compare bootstrap distribution of the mean to sampling distribution
+        of the mean.
 
-    @parameterized.expand([
-        (pd.Series(px_list,
-                   index=dt), 0.0, 2.0)
-    ])
-    def test_omega(self, returns, annual_return_threshhold, expected):
-        self.assertEqual(
-            timeseries.omega_ratio(
-                returns,
-                annual_return_threshhold=annual_return_threshhold),
-            expected)
+        """
+        np.random.seed(123)
+        func = np.mean
+        returns = pd.Series((np.random.randn(n) * true_sd) +
+                            true_mean)
 
-    @parameterized.expand([
-        (-simple_rets[:5], 'calendar', -458003439.10738045),
-        (-simple_rets[:5], 'arithmetic', -723163324.90639055)
-    ])
-    def test_sortino(self, returns, returns_style, expected):
-        self.assertEqual(
-            timeseries.sortino_ratio(
-                returns,
-                returns_style=returns_style),
-            expected)
+        samples = timeseries.calc_bootstrap(func, returns,
+                                            n_samples=10000)
+
+        # Calculate statistics of sampling distribution of the mean
+        mean_of_mean = np.mean(returns)
+        sd_of_mean = np.std(returns) / np.sqrt(n)
+
+        assert_almost_equal(
+            np.mean(samples),
+            mean_of_mean,
+            3,
+            'Mean of bootstrap does not match theoretical mean of'
+            'sampling distribution')
+
+        assert_almost_equal(
+            np.std(samples),
+            sd_of_mean,
+            3,
+            'SD of bootstrap does not match theoretical SD of'
+            'sampling distribution')
 
 
-class TestMultifactor(TestCase):
-    simple_rets = pd.Series(
-        [0.1] * 3 + [0] * 497,
-        pd.date_range(
-            '2000-1-1',
-            periods=500,
-            freq='D'))
-    simple_benchmark_rets = pd.DataFrame(
-        pd.Series(
-            [0.03] * 4 + [0] * 496,
-            pd.date_range(
-                '2000-1-1',
-                periods=500,
-                freq='D')),
-        columns=['bm'])
+class TestGrossLev(TestCase):
+    __location__ = os.path.realpath(
+        os.path.join(os.getcwd(), os.path.dirname(__file__)))
 
-    @parameterized.expand([
-        (simple_rets[:4], simple_benchmark_rets[:4], [2.5000000000000004])
-    ])
-    def test_calc_multifactor(self, returns, factors, expected):
-        self.assertEqual(
-            timeseries.calc_multifactor(
-                returns,
-                factors).values.tolist(),
-            expected)
+    test_pos = to_utc(pd.read_csv(
+        gzip.open(__location__ + '/test_data/test_pos.csv.gz'),
+        index_col=0, parse_dates=True))
+    test_gross_lev = pd.read_csv(
+        gzip.open(
+            __location__ + '/test_data/test_gross_lev.csv.gz'),
+        index_col=0, parse_dates=True)
+    test_gross_lev = to_series(to_utc(test_gross_lev))
 
-    @parameterized.expand([
-        (simple_rets[:5],
-         simple_benchmark_rets[:5],
-         2,
-         [0.09991008092716558,
-            0.002997302427814967])
-    ])
-    def test_multifactor_beta(
-            self, returns, simple_benchmark_rets, rolling_window, expected):
-        self.assertEqual(
-            timeseries.rolling_multifactor_beta(
-                returns,
-                simple_benchmark_rets,
-                rolling_window=rolling_window).values.tolist()[2],
-            expected)
+    def test_gross_lev_calculation(self):
+        assert_series_equal(
+            timeseries.gross_lev(self.test_pos)['2004-02-01':],
+            self.test_gross_lev['2004-02-01':], check_names=False)
